@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Empacotamento
+build/
+dist/
+*.spec
+
+# Projetos e arquivos temporários
+*.passo
+*.passo.tmp
+
+# Sistema e editores
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
