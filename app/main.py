@@ -51,6 +51,7 @@ class PassoApp:
         self.bar = RecordingBar(self.controller)
         self.bar.btn_close.clicked.connect(app.quit)
         self.bar.openRequested.connect(self.ask_and_open)
+        self.bar.settingsRequested.connect(self.choose_default_dir)
         self.controller.error.connect(lambda message: print(message, file=sys.stderr))
         self.controller.finished.connect(self.on_finished)
 
@@ -95,10 +96,28 @@ class PassoApp:
     def ask_and_open(self) -> None:
         from PySide6.QtWidgets import QFileDialog
 
-        start = str(Path.home() / "Documents")
+        from app import settings
+
+        start = str(settings.last_dir("abrir"))
         path, _ = QFileDialog.getOpenFileName(self.bar, "Abrir tutorial", start, "Projeto Passo a Passo (*.passo)")
-        if path and self.open_file(Path(path)) is not None:
+        if not path:
+            return
+        settings.remember_dir("abrir", Path(path).parent)
+        if self.open_file(Path(path)) is not None:
             self.bar.hide()
+
+    def choose_default_dir(self) -> Path | None:
+        """Engrenagem da barra: pasta padrão dos tutoriais (usada enquanto não há última pasta)."""
+        from PySide6.QtWidgets import QFileDialog
+
+        from app import settings
+
+        folder = QFileDialog.getExistingDirectory(self.bar, "Pasta padrão dos tutoriais", str(settings.default_dir()))
+        if not folder:
+            return None
+        settings.set_default_dir(folder)
+        self.bar.update_settings_tooltip()
+        return Path(folder)
 
     def on_finished(self, workspace) -> None:
         from PySide6.QtWidgets import QMessageBox
@@ -112,7 +131,9 @@ class PassoApp:
             self.app.quit()
             return
         saved = None
-        path = ask_save_path(None)
+        # Tutorial novo: nome automático, que também vira o título inicial.
+        path = ask_save_path(None, workspace.project)
+        workspace.flush()
         if path is not None:
             try:
                 saved = workspace.save_to(path)

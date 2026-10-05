@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -266,6 +267,15 @@ class Project:
 
     def circle_for(self, step: Step) -> CircleStyle:
         return step.circle_override or self.theme.circle
+
+
+_NUMERO = re.compile(r"^Passo \d+:")
+
+
+def renumber_steps(steps: list[Step]) -> None:
+    """Refaz o "Passo N:" do começo de cada texto conforme a posição atual."""
+    for n, step in enumerate(steps, start=1):
+        step.text = _NUMERO.sub(f"Passo {n}:", step.text, count=1)
 
 
 def migrate(d: dict) -> dict:

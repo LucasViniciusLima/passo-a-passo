@@ -13,6 +13,7 @@ from app.project.storage import ProjectWorkspace
 from app.recorder.hotkeys import GlobalHotkeys
 from app.recorder.state import RecorderState, StateMachine
 from app.recorder.worker import CaptureWorker
+from app.theme import apply_brand_defaults
 
 
 class RecordingController(QObject):
@@ -48,6 +49,7 @@ class RecordingController(QObject):
             return
         now = time.monotonic()
         self.workspace = ProjectWorkspace()
+        apply_brand_defaults(self.workspace)
         self._worker = CaptureWorker(
             self.workspace,
             capture.create_screen_grabber(),

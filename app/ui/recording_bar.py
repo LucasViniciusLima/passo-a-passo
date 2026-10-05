@@ -6,7 +6,7 @@ from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
-from app import capture
+from app import capture, settings
 from app.recorder.controller import RecordingController
 from app.recorder.state import RecorderState
 
@@ -21,7 +21,8 @@ QPushButton:hover { background: #455A64; }
 QPushButton:disabled { color: #78909C; }
 QPushButton#start { background: #E53935; }
 QPushButton#start:hover { background: #EF5350; }
-QPushButton#close { background: transparent; padding: 4px 8px; }
+QPushButton#close, QPushButton#settings { background: transparent; padding: 4px 8px; }
+QPushButton#settings { font-size: 15px; }
 """
 
 
@@ -32,6 +33,7 @@ def format_elapsed(seconds: float) -> str:
 
 class RecordingBar(QWidget):
     openRequested = Signal()
+    settingsRequested = Signal()
 
     def __init__(self, controller: RecordingController) -> None:
         super().__init__(
@@ -53,6 +55,8 @@ class RecordingBar(QWidget):
         self.btn_finish = QPushButton("Finalizar")
         self.steps_label = QLabel("0 passos")
         self.time_label = QLabel("00:00")
+        self.btn_settings = QPushButton("⚙", objectName="settings")
+        self.update_settings_tooltip()
         self.btn_close = QPushButton("✕", objectName="close")
         self.btn_close.setToolTip("Fechar")
         self.btn_pause.setToolTip("Pausar ou retomar (Ctrl+Shift+F9)")
@@ -62,7 +66,7 @@ class RecordingBar(QWidget):
         layout.setContentsMargins(10, 6, 6, 6)
         layout.setSpacing(8)
         for w in (self.status, self.btn_start, self.btn_open, self.btn_pause, self.btn_finish,
-                  self.steps_label, self.time_label, self.btn_close):
+                  self.steps_label, self.time_label, self.btn_settings, self.btn_close):
             layout.addWidget(w)
 
         self.btn_start.clicked.connect(self._begin_countdown)
@@ -70,6 +74,7 @@ class RecordingBar(QWidget):
         self.btn_finish.clicked.connect(controller.finish)
         self.btn_close.clicked.connect(self.close)
         self.btn_open.clicked.connect(self.openRequested)
+        self.btn_settings.clicked.connect(self.settingsRequested)
         controller.stateChanged.connect(self._on_state)
         controller.stepCountChanged.connect(self._on_steps)
 
@@ -78,6 +83,9 @@ class RecordingBar(QWidget):
         self._countdown_timer = QTimer(self, interval=1000)
         self._countdown_timer.timeout.connect(self._countdown_step)
         self._on_state(RecorderState.IDLE)
+
+    def update_settings_tooltip(self) -> None:
+        self.btn_settings.setToolTip(f"Pasta padrão dos tutoriais:\n{settings.default_dir()}")
 
     # --- estados ---------------------------------------------------------
 
@@ -88,6 +96,7 @@ class RecordingBar(QWidget):
         self.btn_pause.setVisible(not idle)
         self.btn_finish.setVisible(not idle)
         self.btn_close.setVisible(idle)
+        self.btn_settings.setVisible(idle)
         self.btn_pause.setText("Retomar" if state is RecorderState.PAUSED else "Pausar")
         self.status.setText(state.value if not idle else "Pronto")
         if state in (RecorderState.RECORDING, RecorderState.PAUSED):
@@ -107,6 +116,7 @@ class RecordingBar(QWidget):
         self._countdown = COUNTDOWN_SECONDS
         self.btn_start.setEnabled(False)
         self.btn_open.setEnabled(False)
+        self.btn_settings.setEnabled(False)
         self.btn_close.setEnabled(False)
         self.status.setText(f"Gravando em {self._countdown}…")
         self._countdown_timer.start()
@@ -119,6 +129,7 @@ class RecordingBar(QWidget):
         self._countdown_timer.stop()
         self.btn_start.setEnabled(True)
         self.btn_open.setEnabled(True)
+        self.btn_settings.setEnabled(True)
         self.btn_close.setEnabled(True)
         self._update_ignore_rect()
         self.controller.start()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import threading
 from pathlib import Path
 
@@ -13,16 +12,13 @@ from PySide6.QtWidgets import (
     QMessageBox, QProgressBar, QPushButton, QSpinBox, QStackedWidget, QVBoxLayout, QWidget,
 )
 
+from app import settings
 from app.export import TRANSITIONS, Cancelled, GifOptions, PdfOptions, VideoOptions
+from app.project.naming import safe_filename
 from app.project.storage import ProjectWorkspace
 
 FORMATS = [("pdf", "PDF", ".pdf"), ("gif", "GIF animado", ".gif"), ("mp4", "Vídeo MP4", ".mp4")]
 FILTERS = {"pdf": "PDF (*.pdf)", "gif": "GIF (*.gif)", "mp4": "Vídeo MP4 (*.mp4)"}
-
-
-def safe_filename(title: str) -> str:
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", title).strip().strip(".")
-    return name or "tutorial"
 
 
 class ExportWorker(QThread):
@@ -80,7 +76,7 @@ class ExportDialog(QDialog):
         self.setWindowTitle("Exportar tutorial")
         self.setMinimumWidth(460)
         self.workspace = workspace
-        self.start_dir = start_dir or Path.home() / "Documents"
+        self.start_dir = start_dir or settings.last_dir("exportar")
         self.worker: ExportWorker | None = None
         self.result_path: Path | None = None
 
@@ -221,6 +217,7 @@ class ExportDialog(QDialog):
         if not dest.parent.is_dir():
             QMessageBox.warning(self, "Exportar", "A pasta escolhida não existe.")
             return
+        settings.remember_dir("exportar", dest.parent)
         self.result_path = None
         self.bar.setValue(0)
         self.status.setText("Exportando…")

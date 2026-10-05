@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
@@ -9,6 +11,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
+from app import settings
 from app.project.storage import ProjectWorkspace
 from app.theme import LOGO_FORMATS, contrast_ratio, remove_logo, set_logo
 
@@ -108,6 +111,8 @@ class AppearancePanel(QWidget):
 
     def set_color(self, attr: str, value: str) -> None:
         setattr(self.theme, attr, value.upper())
+        # A última cor escolhida vira o padrão dos próximos tutoriais.
+        settings.remember_color(attr, value.upper())
         self._apply()
 
     def _apply(self) -> None:
@@ -125,16 +130,25 @@ class AppearancePanel(QWidget):
         self._apply()
 
     def _choose_logo(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Escolher logo", "", LOGO_FORMATS)
+        start = str(settings.last_dir("logo"))
+        path, _ = QFileDialog.getOpenFileName(self, "Escolher logo", start, LOGO_FORMATS)
         if not path:
             return
+        settings.remember_dir("logo", Path(path).parent)
+        self.use_logo(path)
+
+    def use_logo(self, path: str | Path) -> bool:
         try:
-            set_logo(self.workspace, path)
+            logo = set_logo(self.workspace, path)
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Logo", f"Não foi possível usar esta imagem:\n{exc}")
-            return
+            return False
+        # Já convertida para PNG: vira a logo padrão dos próximos tutoriais.
+        settings.remember_logo(self.workspace.root / logo)
         self._apply()
+        return True
 
     def _remove_logo(self) -> None:
         remove_logo(self.workspace)
+        settings.forget_logo()
         self._apply()

@@ -13,7 +13,10 @@ LOGO_FILE = f"{ASSETS_DIR}/logo.png"
 LOGO_MAX = 1024  # px no maior lado; logo maior que isso só pesa no arquivo
 LOGO_FORMATS = "Imagens (*.png *.jpg *.jpeg *.svg)"
 
-__all__ = ["Theme", "LOGO_FILE", "LOGO_FORMATS", "set_logo", "remove_logo", "contrast_ratio", "load_logo"]
+__all__ = [
+    "Theme", "LOGO_FILE", "LOGO_FORMATS", "set_logo", "remove_logo", "contrast_ratio", "load_logo",
+    "apply_brand_defaults",
+]
 
 
 def _svg_to_image(path: Path) -> Image.Image:
@@ -63,6 +66,22 @@ def remove_logo(workspace: ProjectWorkspace) -> None:
     workspace.flush()
     if logo:
         (workspace.root / logo).unlink(missing_ok=True)
+
+
+def apply_brand_defaults(workspace: ProjectWorkspace) -> None:
+    """Tutorial novo: usa as últimas cores e a última logo escolhidas pelo usuário."""
+    from app import settings
+
+    theme = workspace.project.theme
+    for attr, value in settings.brand_colors().items():
+        setattr(theme, attr, value)
+    logo = settings.default_logo()
+    if logo is not None:
+        try:
+            set_logo(workspace, logo)
+        except (OSError, ValueError):
+            pass  # logo padrão corrompida: segue sem logo
+    workspace.flush()
 
 
 def load_logo(project_root: str | Path, theme: Theme) -> Image.Image | None:

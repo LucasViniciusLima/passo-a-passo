@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import html
+import re
 from pathlib import Path
 
 from PIL import Image
-from PySide6.QtCore import QSize, Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QRectF, QSize, Qt, QUrl
+from PySide6.QtGui import (
+    QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPen, QPixmap, QShortcut, QTextDocument,
+)
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMainWindow, QMessageBox, QPushButton, QSizePolicy, QSplitter, QVBoxLayout, QWidget,
+    QAbstractItemView, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMainWindow, QMessageBox, QPushButton, QSizePolicy, QSplitter, QStyle, QStyledItemDelegate,
+    QVBoxLayout, QWidget,
 )
 
+from app import settings
+from app.project.model import Project, renumber_steps
+from app.project.naming import DEFAULT_TITLE, auto_title, safe_filename, unique_path
 from app.project.storage import ProjectWorkspace
 from app.render.annotate import annotate_step
 from app.render.preview import export_step_images
@@ -20,15 +28,80 @@ from app.ui.export_dialog import ExportDialog
 from app.ui.qt_image import pil_to_qpixmap
 
 THUMB_SIZE = QSize(200, 120)
+GRID_SIZE = QSize(THUMB_SIZE.width() + 20, THUMB_SIZE.height() + 50)
+SELECTED_BORDER = 3  # px, na cor de destaque do tema
 
 
-def ask_save_path(parent: QWidget | None, suggested: str = "tutorial.passo") -> Path | None:
-    start = str(Path.home() / "Documents" / suggested)
+def ask_save_path(parent: QWidget | None, project: Project | None = None) -> Path | None:
+    """Pergunta onde salvar, já sugerindo um nome que não sobrescreve nada.
+
+    Tutorial novo (título padrão) ganha o nome automático, que vira também o título.
+    """
+    folder = settings.last_dir("salvar")
+    stem = "tutorial"
+    if project is not None:
+        if project.title.strip() in ("", DEFAULT_TITLE):
+            project.title = auto_title(project)
+        stem = safe_filename(project.title)
+    start = str(unique_path(folder, stem, ".passo"))
     path, _ = QFileDialog.getSaveFileName(parent, "Salvar tutorial", start, "Projeto Passo a Passo (*.passo)")
     if not path:
         return None
     path = Path(path)
+    settings.remember_dir("salvar", path.parent)
     return path if path.suffix.lower() == ".passo" else path.with_suffix(".passo")
+
+
+_NUMERO = re.compile(r"^(Passo \d+:)(.*)$", re.DOTALL)
+
+
+def item_html(text: str, selected: bool) -> str:
+    """Texto da miniatura; na selecionada, o "Passo N:" vai em negrito."""
+    if not selected:
+        return html.escape(text)
+    match = _NUMERO.match(text)
+    if match is None:
+        return f"<b>{html.escape(text)}</b>"
+    return f"<b>{html.escape(match.group(1))}</b>{html.escape(match.group(2))}"
+
+
+class ThumbnailDelegate(QStyledItemDelegate):
+    """Selecionada: contorno na cor de destaque e número em negrito, com ou sem foco na lista."""
+
+    def __init__(self, color: str, parent=None) -> None:
+        super().__init__(parent)
+        self.color = color
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(GRID_SIZE.width() - 4, GRID_SIZE.height() - 4)
+
+    def paint(self, painter: QPainter, option, index) -> None:
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        rect = option.rect.adjusted(1, 1, -1, -1)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if selected:
+            half = SELECTED_BORDER / 2
+            painter.setPen(QPen(QColor(self.color), SELECTED_BORDER))
+            painter.setBrush(Qt.BrushStyle.NoBrush)  # só o contorno; fundo e fonte seguem o tema do sistema
+            painter.drawRoundedRect(QRectF(rect).adjusted(half, half, -half, -half), 6, 6)
+
+        top = rect.top() + SELECTED_BORDER + 3
+        icon = index.data(Qt.ItemDataRole.DecorationRole)
+        if isinstance(icon, QIcon) and not icon.isNull():
+            pixmap = icon.pixmap(THUMB_SIZE)
+            size = pixmap.deviceIndependentSize().toSize()
+            painter.drawPixmap(rect.center().x() - size.width() // 2, top, size.width(), size.height(), pixmap)
+            top += THUMB_SIZE.height() + 2
+
+        doc = QTextDocument()
+        doc.setDefaultFont(option.font)
+        color = option.palette.text().color().name()
+        doc.setHtml(f'<div align="center" style="color: {color}">{item_html(index.data() or "", selected)}</div>')
+        doc.setTextWidth(rect.width() - 2 * SELECTED_BORDER - 4)
+        painter.translate(rect.left() + SELECTED_BORDER + 2, top)
+        doc.drawContents(painter, QRectF(0, 0, doc.textWidth(), rect.bottom() - top - SELECTED_BORDER))
+        painter.restore()
 
 
 class _ImageView(QLabel):
@@ -67,6 +140,8 @@ class ReviewWindow(QMainWindow):
         self.saved_path = saved_path
         self.dirty = saved_path is None
         self._cache: dict[str, QPixmap] = {}
+        # Cada exclusão guarda os passos, os textos e a linha de antes, para o Ctrl+Z.
+        self._undo: list[tuple[list, dict[str, str], int]] = []
 
         self.list = QListWidget()
         self.list.setViewMode(QListWidget.ViewMode.IconMode)
@@ -75,16 +150,22 @@ class ReviewWindow(QMainWindow):
         self.list.setMovement(QListWidget.Movement.Static)
         self.list.setWordWrap(True)
         self.list.setIconSize(THUMB_SIZE)
-        self.list.setGridSize(QSize(THUMB_SIZE.width() + 20, THUMB_SIZE.height() + 50))
+        self.list.setGridSize(GRID_SIZE)
         self.list.setFixedWidth(THUMB_SIZE.width() + 44)
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.thumbs = ThumbnailDelegate(self.project.theme.highlight_color, self.list)
+        self.list.setItemDelegate(self.thumbs)
         self.view = _ImageView()
         self.text = QLineEdit()
         self.text.setPlaceholderText("Texto do passo")
         self.btn_save = QPushButton("Salvar")
         self.btn_images = QPushButton("Salvar imagens")
         self.btn_images.setToolTip("Grava um PNG por passo, com o círculo e o texto")
+        self.btn_delete = QPushButton("Excluir passo")
+        self.btn_delete.setToolTip("Exclui os passos selecionados (Delete). Ctrl+Z desfaz.")
 
         bottom = QHBoxLayout()
+        bottom.addWidget(self.btn_delete)
         bottom.addWidget(QLabel("Texto:"))
         bottom.addWidget(self.text, 1)
         bottom.addWidget(self.btn_images)
@@ -116,21 +197,27 @@ class ReviewWindow(QMainWindow):
         self.setCentralWidget(splitter)
         self.resize(1400, 800)
 
-        for step in self.project.steps:
-            item = QListWidgetItem(QIcon(self._thumbnail(step)), step.text)
-            self.list.addItem(item)
+        self._fill_list()
 
         self.list.currentRowChanged.connect(self._show_step)
+        self.list.itemSelectionChanged.connect(self._update_delete_button)
         self.text.textEdited.connect(self._edit_text)
+        self.btn_delete.clicked.connect(lambda: self.delete_selected())
         self.btn_save.clicked.connect(self.save)
         self.btn_images.clicked.connect(self.save_images)
         self.btn_export.clicked.connect(self.open_export)
         self.title.textEdited.connect(self._edit_title)
         self.appearance.changed.connect(self._theme_changed)
         QShortcut(QKeySequence.StandardKey.Save, self, activated=self.save)
+        # Delete só na lista: no campo de texto a tecla continua apagando letras.
+        QShortcut(QKeySequence.StandardKey.Delete, self.list, activated=lambda: self.delete_selected(),
+                  context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        # Nos campos de texto o Ctrl+Z continua desfazendo a digitação (o campo trata antes).
+        QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo_delete)
         self._update_title()
         if self.project.steps:
             self.list.setCurrentRow(0)
+        self._update_delete_button()
 
     def _annotated(self, index: int) -> QPixmap:
         step = self.project.steps[index]
@@ -144,6 +231,20 @@ class ReviewWindow(QMainWindow):
         return self._annotated(index).scaled(
             THUMB_SIZE, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         )
+
+    def _fill_list(self) -> None:
+        self.list.blockSignals(True)
+        self.list.clear()
+        for step in self.project.steps:
+            self.list.addItem(QListWidgetItem(QIcon(self._thumbnail(step)), step.text))
+        self.list.blockSignals(False)
+
+    def _select(self, row: int) -> None:
+        self.list.clearSelection()
+        if self.project.steps:
+            self.list.setCurrentRow(max(0, min(row, len(self.project.steps) - 1)))
+        self._show_step(self.list.currentRow())
+        self._update_delete_button()
 
     def _show_step(self, row: int) -> None:
         if row < 0:
@@ -163,17 +264,77 @@ class ReviewWindow(QMainWindow):
         self.dirty = True
         self._update_title()
 
+    # --- excluir passos --------------------------------------------------
+
+    def selected_rows(self) -> list[int]:
+        rows = sorted({self.list.row(item) for item in self.list.selectedItems()})
+        if not rows and self.list.currentRow() >= 0:
+            rows = [self.list.currentRow()]
+        return rows
+
+    def _update_delete_button(self) -> None:
+        n = len(self.selected_rows())
+        self.btn_delete.setText("Excluir passo" if n <= 1 else f"Excluir {n} passos")
+        self.btn_delete.setEnabled(n > 0)
+
+    def delete_selected(self, confirm: bool = True) -> bool:
+        rows = self.selected_rows()
+        if not rows:
+            return False
+        if len(rows) >= len(self.project.steps):
+            QMessageBox.information(self, "Excluir passo", "O tutorial precisa ter pelo menos um passo.")
+            return False
+        if confirm:
+            question = (f"Excluir o passo {rows[0] + 1}?" if len(rows) == 1
+                        else f"Excluir os {len(rows)} passos selecionados?")
+            answer = QMessageBox.question(
+                self, "Excluir passo", f"{question}\nVocê pode desfazer com Ctrl+Z.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return False
+        steps = self.project.steps
+        self._undo.append((list(steps), {s.id: s.text for s in steps}, self.list.currentRow()))
+        # As imagens ficam na pasta temporária (para o Ctrl+Z); o .passo e as exportações
+        # só leem os passos restantes.
+        removed = set(rows)
+        steps[:] = [s for i, s in enumerate(steps) if i not in removed]
+        renumber_steps(steps)
+        self._fill_list()
+        self._select(rows[0])
+        self._mark_dirty()
+        n = len(rows)
+        done = "1 passo excluído" if n == 1 else f"{n} passos excluídos"
+        self.statusBar().showMessage(f"{done} — Ctrl+Z para desfazer", 8000)
+        return True
+
+    def undo_delete(self) -> bool:
+        if not self._undo:
+            return False
+        steps, texts, row = self._undo.pop()
+        self.project.steps[:] = steps
+        for step in steps:
+            step.text = texts.get(step.id, step.text)
+        self._fill_list()
+        self._select(row)
+        self._mark_dirty()
+        self.statusBar().showMessage("Exclusão desfeita", 5000)
+        return True
+
+    # --- edição ----------------------------------------------------------
+
     def _mark_dirty(self) -> None:
         self.workspace.flush()
         self.dirty = True
         self._update_title()
 
     def _edit_title(self, value: str) -> None:
-        self.project.title = value.strip() or "Novo tutorial"
+        self.project.title = value.strip() or DEFAULT_TITLE
         self._mark_dirty()
 
     def _theme_changed(self) -> None:
         # Prévia ao vivo: refaz a captura atual e as miniaturas com o tema novo.
+        self.thumbs.color = self.project.theme.highlight_color
         self._cache.clear()
         for row, step in enumerate(self.project.steps):
             self.list.item(row).setIcon(QIcon(self._thumbnail(step)))
@@ -181,8 +342,7 @@ class ReviewWindow(QMainWindow):
         self._mark_dirty()
 
     def open_export(self) -> None:
-        start = self.saved_path.parent if self.saved_path else None
-        ExportDialog(self.workspace, start, self).exec()
+        ExportDialog(self.workspace, None, self).exec()
 
     def _update_title(self) -> None:
         name = self.saved_path.name if self.saved_path else "não salvo"
@@ -190,7 +350,10 @@ class ReviewWindow(QMainWindow):
         self.setWindowTitle(f"Revisão — {name}{mark} — Passo a Passo")
 
     def save(self) -> bool:
-        path = self.saved_path or ask_save_path(self)
+        path = self.saved_path or ask_save_path(self, self.project)
+        if self.title.text() != self.project.title:
+            self.title.setText(self.project.title)  # o nome automático vira o título
+            self.workspace.flush()
         if path is None:
             return False
         try:
@@ -204,10 +367,11 @@ class ReviewWindow(QMainWindow):
         return True
 
     def save_images(self) -> None:
-        start = str(self.saved_path.parent if self.saved_path else Path.home() / "Documents")
+        start = str(settings.last_dir("imagens"))
         folder = QFileDialog.getExistingDirectory(self, "Pasta para as imagens", start)
         if not folder:
             return
+        settings.remember_dir("imagens", folder)
         try:
             paths = export_step_images(self.project, self.workspace.root, folder)
         except OSError as exc:
