@@ -10,9 +10,11 @@ from ctypes import wintypes
 
 import mss
 from PIL import Image
-from pynput import mouse
+from pynput import keyboard, mouse
 
-from app.capture.base import ClickEvent, ElementInfo, ElementInspector, InputHook, ScreenGrabber
+from app.capture.base import (
+    ClickEvent, ElementInfo, ElementInspector, InputHook, KeyEvent, KeyHook, ScreenGrabber,
+)
 from app.capture.coords import Monitor
 
 _DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
@@ -135,6 +137,52 @@ def _union(a, b):
     return min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])
 
 
+class _GUITHREADINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("hwndActive", wintypes.HWND),
+        ("hwndFocus", wintypes.HWND),
+        ("hwndCapture", wintypes.HWND),
+        ("hwndMenuOwner", wintypes.HWND),
+        ("hwndMoveSize", wintypes.HWND),
+        ("hwndCaret", wintypes.HWND),
+        ("rcCaret", wintypes.RECT),
+    ]
+
+
+def _center(rect) -> tuple[int, int] | None:
+    if rect is None:
+        return None
+    return (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
+
+
+def win32_focus_point() -> tuple[int, int] | None:
+    """Cursor de texto, controle com foco ou janela ativa; por último, o ponteiro do mouse."""
+    user32 = ctypes.windll.user32
+    fg = user32.GetForegroundWindow()
+    if fg:
+        tid = user32.GetWindowThreadProcessId(wintypes.HWND(fg), None)
+        gti = _GUITHREADINFO(cbSize=ctypes.sizeof(_GUITHREADINFO))
+        if user32.GetGUIThreadInfo(tid, ctypes.byref(gti)):
+            caret = gti.rcCaret
+            if gti.hwndCaret and caret.bottom > caret.top:
+                pt = wintypes.POINT(caret.left, (caret.top + caret.bottom) // 2)
+                if user32.ClientToScreen(gti.hwndCaret, ctypes.byref(pt)):
+                    return pt.x, pt.y
+            for hwnd in (gti.hwndFocus, gti.hwndActive):
+                point = _center(_frame_rect(hwnd)) if hwnd else None
+                if point is not None:
+                    return point
+        point = _center(_frame_rect(fg))
+        if point is not None:
+            return point
+    pt = wintypes.POINT()
+    if user32.GetCursorPos(ctypes.byref(pt)):
+        return pt.x, pt.y
+    return None
+
+
 class Win32ElementInspector(ElementInspector):
     """Janela sob o ponto via user32: título, classe e executável do processo."""
 
@@ -168,6 +216,9 @@ class Win32ElementInspector(ElementInspector):
             window_rect=window_rect,
         )
 
+    def focus_point(self) -> tuple[int, int] | None:
+        return win32_focus_point()
+
 
 _BUTTONS = {mouse.Button.left: "left", mouse.Button.right: "right", mouse.Button.middle: "middle"}
 
@@ -191,6 +242,59 @@ class PynputInputHook(InputHook):
         if self._listener is not None:
             self._listener.stop()
             self._listener = None
+
+
+# GetAsyncKeyState: Ctrl, Alt, Win esquerda e direita, Shift.
+_VK_CONTROL, _VK_MENU, _VK_LWIN, _VK_RWIN, _VK_SHIFT = 0x11, 0x12, 0x5B, 0x5C, 0x10
+
+
+def key_name(base: str, ctrl: bool, alt: bool, win: bool, shift: bool) -> str | None:
+    """Nome do passo de teclado; None quando a tecla faz parte de um atalho (Ctrl, Alt ou Win)."""
+    if ctrl or alt or win:
+        return None
+    if shift and base == "Tab":
+        return "Shift+Tab"
+    return base
+
+
+def modifiers_down() -> tuple[bool, bool, bool, bool]:
+    """(Ctrl, Alt, Win, Shift) pressionados agora."""
+    down = ctypes.windll.user32.GetAsyncKeyState
+
+    def pressed(vk: int) -> bool:
+        return bool(down(vk) & 0x8000)
+
+    return pressed(_VK_CONTROL), pressed(_VK_MENU), pressed(_VK_LWIN) or pressed(_VK_RWIN), pressed(_VK_SHIFT)
+
+
+class PynputKeyHook(KeyHook):
+    """Hook global de teclado que só olha Tab e Enter. As outras teclas são descartadas na hora."""
+
+    _KEYS = {keyboard.Key.tab: "Tab", keyboard.Key.enter: "Enter"}
+
+    def __init__(self) -> None:
+        self._listener: keyboard.Listener | None = None
+        self._on_key: Callable[[KeyEvent], None] | None = None
+
+    def handle(self, key) -> None:
+        base = self._KEYS.get(key)
+        if base is None or self._on_key is None:
+            return  # nada do que é digitado é guardado
+        name = key_name(base, *modifiers_down())
+        if name is not None:
+            self._on_key(KeyEvent(name, time.monotonic()))
+
+    def start(self, on_key: Callable[[KeyEvent], None]) -> None:
+        self._on_key = on_key
+        self._listener = keyboard.Listener(on_press=self.handle)
+        self._listener.start()
+        self._listener.wait()
+
+    def stop(self) -> None:
+        if self._listener is not None:
+            self._listener.stop()
+            self._listener = None
+        self._on_key = None
 
 
 class MssScreenGrabber(ScreenGrabber):

@@ -52,6 +52,7 @@ class PassoApp:
         self.bar.btn_close.clicked.connect(app.quit)
         self.bar.openRequested.connect(self.ask_and_open)
         self.bar.settingsRequested.connect(self.choose_default_dir)
+        self.bar.restartAsAdminRequested.connect(self.restart_as_admin)
         self.controller.error.connect(lambda message: print(message, file=sys.stderr))
         self.controller.finished.connect(self.on_finished)
 
@@ -118,6 +119,29 @@ class PassoApp:
         settings.set_default_dir(folder)
         self.bar.update_settings_tooltip()
         return Path(folder)
+
+    def restart_as_admin(self) -> bool:
+        """Abre outra instância elevada (UAC) e fecha esta. A gravação em andamento é descartada."""
+        from PySide6.QtWidgets import QMessageBox
+
+        from app.recorder.state import RecorderState
+
+        workspace = self.controller.workspace
+        count = len(workspace.project.steps) if workspace is not None else 0
+        if self.controller.state is not RecorderState.IDLE and count:
+            answer = QMessageBox.question(
+                self.bar, "Reiniciar como administrador",
+                f"Os {count} passos desta gravação serão descartados. Para guardá-los, finalize antes.\n\n"
+                "Reiniciar como administrador mesmo assim?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return False
+        if not capture.restart_as_admin():
+            QMessageBox.warning(self.bar, "Passo a Passo", "Não foi possível abrir como administrador.")
+            return False
+        self.controller.abort()
+        self.app.quit()
+        return True
 
     def on_finished(self, workspace) -> None:
         from PySide6.QtWidgets import QMessageBox

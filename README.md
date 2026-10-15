@@ -12,6 +12,8 @@ Este é o **protótipo da fase 0** (somente Windows 10/11). O plano completo est
 - Um passo por clique, capturado no botão pressionado, no monitor onde o clique aconteceu.
 - Texto automático com o elemento clicado (UI Automation): "Clique no botão Salvar no Bloco de Notas", "Abra o menu Arquivo", "Clique na aba ... no Google Chrome". Campos de senha aparecem só como "campo de senha".
 - Duplo clique vira um passo só; clique direito tem texto próprio.
+- **Tab** e **Enter** também viram passos ("Pressione Enter no ...", "Pressione Tab 3 vezes"), capturados no key-down. Tabs seguidos ou segurados viram um passo só; com Ctrl, Alt ou Win são ignorados. Nada do que é digitado é gravado. Liga e desliga na engrenagem (ligado por padrão).
+- Programas que rodam como administrador (comum em sistemas legados, como os feitos em COBOL): o Windows não entrega os cliques deles a um app comum. A barra avisa e oferece **Reiniciar como administrador** (também na engrenagem). Cliques e teclas descartados ficam registrados em `%LOCALAPPDATA%\PassoAPasso\erros.log`.
 - Fundo desfocado e escurecido, com o local do clique nítido (configurável no tema).
 - Cliques na barra são ignorados e a barra não aparece nas capturas.
 - DPI Per-Monitor V2, para o círculo cair no lugar certo em telas com 125%, 150% etc.
@@ -59,6 +61,22 @@ Na revisão, **Salvar imagens** grava numa pasta um PNG por passo (`passo-001.pn
 ```powershell
 python -m pytest
 ```
+
+## Gerar o executável
+
+```powershell
+pip install pyinstaller
+pyinstaller packaging\PassoAPasso.spec --noconfirm
+```
+
+A build sai em `dist\Passo a Passo\` (pasta inteira; o `.exe` sozinho não roda) com Python, Qt, FFmpeg e os wrappers do UI Automation embutidos. Para conferir sem abrir janelas:
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+Start-Process "dist\Passo a Passo\Passo a Passo.exe" -ArgumentList "--autoteste", "--relatorio=$env:TEMP\autoteste.txt" -Wait -PassThru
+```
+
+Código de saída 0 e `AUTOTESTE OK` no relatório indicam que imports, janelas e exportação de PDF, GIF e MP4 funcionam. Para distribuir, compacte a pasta junto com `packaging\LEIA-ME.txt`.
 
 ## Estrutura
 

@@ -10,6 +10,7 @@ venv/
 build/
 dist/
 *.spec
+!packaging/*.spec
 
 # Projetos e arquivos temporários
 *.passo
