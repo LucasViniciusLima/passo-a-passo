@@ -60,6 +60,22 @@ Na revisão, **Salvar imagens** grava numa pasta um PNG por passo (`passo-001.pn
 python -m pytest
 ```
 
+## Gerar o executável
+
+```powershell
+pip install pyinstaller
+pyinstaller packaging\PassoAPasso.spec --noconfirm
+```
+
+A build sai em `dist\Passo a Passo\` (pasta inteira; o `.exe` sozinho não roda) com Python, Qt, FFmpeg e os wrappers do UI Automation embutidos. Para conferir sem abrir janelas:
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+Start-Process "dist\Passo a Passo\Passo a Passo.exe" -ArgumentList "--autoteste", "--relatorio=$env:TEMP\autoteste.txt" -Wait -PassThru
+```
+
+Código de saída 0 e `AUTOTESTE OK` no relatório indicam que imports, janelas e exportação de PDF, GIF e MP4 funcionam. Para distribuir, compacte a pasta junto com `packaging\LEIA-ME.txt`.
+
 ## Estrutura
 
 | Pasta | Conteúdo |
