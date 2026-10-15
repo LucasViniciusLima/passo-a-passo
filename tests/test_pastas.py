@@ -151,11 +151,11 @@ def test_engrenagem_define_a_pasta_padrao(qapp, pastas, monkeypatch):
     shell = PassoApp(qapp)
     assert shell.bar.btn_settings.text() == "⚙"
     assert shell.bar.btn_settings.isVisibleTo(shell.bar)  # visível com a barra parada
-    shell.bar.btn_settings.click()
+    shell.bar.act_folder.trigger()  # engrenagem > Pasta padrão dos tutoriais…
     assert settings.default_dir() == pastas["padrao"]
     assert str(pastas["padrao"]) in shell.bar.btn_settings.toolTip()
 
     # Cancelar o diálogo mantém a pasta.
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a: ""))
-    shell.bar.btn_settings.click()
+    shell.bar.act_folder.trigger()  # engrenagem > Pasta padrão dos tutoriais…
     assert settings.default_dir() == pastas["padrao"]

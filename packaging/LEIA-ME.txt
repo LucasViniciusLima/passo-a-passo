@@ -20,5 +20,12 @@ ATALHOS DURANTE A GRAVAÇÃO
   Ctrl+Shift+F9   pausar / retomar
   Ctrl+Shift+F10  finalizar
 
+Tab e Enter também viram passos (dá para desligar na engrenagem ⚙).
+
+PROGRAMA QUE NÃO GRAVA OS CLIQUES?
+Se o programa roda como administrador, a barra mostra um aviso amarelo.
+Clique em "Reiniciar como administrador" (ou abra o Passo a Passo com o
+botão direito > "Executar como administrador") e grave de novo.
+
 Suas preferências e o registro de erros ficam em
 %LOCALAPPDATA%\PassoAPasso (erros.log). Se algo der errado, envie esse arquivo.

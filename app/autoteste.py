@@ -54,7 +54,19 @@ def _check_uia(log, bundle: Path | None) -> None:
     if bundle is not None and not (origem != "(em memória)" and _inside(origem, bundle)):
         raise RuntimeError("os módulos comtypes.gen deveriam vir de dentro da build")
     info = inspector.inspect(10, 10)
-    log(f"inspeção UIA em (10, 10): {info.element_type!r}")
+    log(f"inspeção UIA em (10, 10): {info.element_type!r}; foco do teclado: {inspector.focus_point()}")
+
+
+def _check_hooks(log) -> None:
+    """Liga e desliga os hooks de mouse e teclado e lê a integridade das janelas (nada aparece)."""
+    from app import capture
+
+    for hook, callback in ((capture.create_input_hook(), lambda e: None), (capture.create_key_hook(), lambda e: None)):
+        hook.start(callback)
+        hook.stop()
+    window = capture.elevated_window_in_use()
+    log(f"hooks de mouse e teclado ok; administrador: {capture.is_admin()}; "
+        f"janela de administrador em uso: {window.name if window else 'nenhuma'}")
 
 
 def _check_ffmpeg(log, bundle: Path | None) -> None:
@@ -160,6 +172,7 @@ def run(report: Path | None = None) -> int:
             log(f"config em: {settings.config_dir()}")
             _check_ffmpeg(log, bundle)
             _check_uia(log, bundle)
+            _check_hooks(log)
             ws = _sample_workspace(tmp)
             _check_windows(log, ws)
             out = tmp / "saida"

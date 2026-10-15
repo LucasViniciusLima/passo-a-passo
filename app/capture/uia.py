@@ -67,6 +67,7 @@ _LEAVES = {_EDIT, _IMAGE, _TEXT}
 _CONTAINERS = {50000, 50002, 50005, 50007, 50011, 50013, 50019, 50024, 50029, 50031}
 
 MAX_STORED_NAME = 200
+MAX_FOCUS_AREA = 800 * 600
 _RPC_E_CHANGED_MODE = -2147417850
 
 
@@ -155,11 +156,11 @@ class UIAElementInspector(ElementInspector):
             return
         ready.set_result({})
         while True:
-            x, y, fut = self._requests.get()
+            query, fut = self._requests.get()
             if not fut.set_running_or_notify_cancel():
                 continue
             try:
-                fut.set_result(self._query(x, y))
+                fut.set_result(query())
             except Exception as exc:
                 fut.set_exception(exc)
 
@@ -195,17 +196,32 @@ class UIAElementInspector(ElementInspector):
             "automation_id": _clean(element.CurrentAutomationId),
         }
 
+    def _focused_center(self) -> tuple[int, int] | None:
+        rect = self._uia.GetFocusedElement().CurrentBoundingRectangle
+        w, h = rect.right - rect.left, rect.bottom - rect.top
+        # Elementos sem tamanho ou do tamanho da tela (documento, janela) não dizem onde está o foco.
+        if w <= 0 or h <= 0 or w * h > MAX_FOCUS_AREA:
+            return None
+        return (rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2
+
+    def _ask(self, query):
+        """Roda a consulta na thread do UIA; None se não respondeu a tempo ou falhou."""
+        if not self._pending.done() or not self._thread.is_alive():
+            return None  # ainda iniciando, travado numa consulta anterior ou sem UIA
+        fut: Future = Future()
+        self._pending = fut
+        self._requests.put((query, fut))
+        try:
+            return fut.result(timeout=self.timeout)
+        except Exception:
+            return None
+
     # --- chamado pelo worker ---------------------------------------------
 
     def inspect(self, x: int, y: int) -> ElementInfo:
         base = self.fallback.inspect(x, y)
-        if not self._pending.done() or not self._thread.is_alive():
-            return base  # ainda iniciando, travado numa consulta anterior ou sem UIA
-        fut: Future = Future()
-        self._pending = fut
-        self._requests.put((x, y, fut))
-        try:
-            result = fut.result(timeout=self.timeout)
-        except Exception:
-            return base
-        return replace(base, **result)
+        result = self._ask(lambda: self._query(x, y))
+        return replace(base, **result) if result else base
+
+    def focus_point(self) -> tuple[int, int] | None:
+        return self._ask(self._focused_center) or self.fallback.focus_point()

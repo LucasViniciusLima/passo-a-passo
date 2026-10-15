@@ -21,11 +21,29 @@ class ClickEvent:
     time: float  # time.monotonic() no momento do clique
 
 
+@dataclass(frozen=True)
+class KeyEvent:
+    """Tecla que vira passo ("Tab", "Shift+Tab" ou "Enter"). Nenhuma outra tecla é registrada."""
+
+    key: str
+    time: float  # time.monotonic() no key-down
+
+
 class InputHook(ABC):
     """Escuta cliques globais. O callback roda na thread do hook e deve ser rápido."""
 
     @abstractmethod
     def start(self, on_click: Callable[[ClickEvent], None]) -> None: ...
+
+    @abstractmethod
+    def stop(self) -> None: ...
+
+
+class KeyHook(ABC):
+    """Escuta só Tab e Enter globais. O callback roda na thread do hook e deve ser rápido."""
+
+    @abstractmethod
+    def start(self, on_key: Callable[[KeyEvent], None]) -> None: ...
 
     @abstractmethod
     def stop(self) -> None: ...
@@ -55,6 +73,10 @@ class ElementInspector(ABC):
 
     @abstractmethod
     def inspect(self, x: int, y: int) -> ElementInfo: ...
+
+    def focus_point(self) -> tuple[int, int] | None:
+        """Onde está o foco do teclado (campo ou cursor de texto), em pixels físicos."""
+        return None
 
 
 class NullInspector(ElementInspector):

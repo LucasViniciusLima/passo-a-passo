@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 SCHEMA_VERSION = 1
 
-ACTIONS = ("click", "double_click", "right_click", "drag")
+ACTIONS = ("click", "double_click", "right_click", "drag", "key")
 
 _ACOES = {
     "click": "clique aqui",
@@ -53,14 +53,19 @@ def default_text(
     place: str | None = None,
     element_name: str | None = None,
     element_type: str | None = None,
+    key: str | None = None,
+    count: int = 1,
 ) -> str:
     """Texto padrão do passo.
 
     place é o local do clique, ex.: "No Bloco de Notas". Com o elemento (UI Automation)
     o texto fica natural: "Clique no botão Salvar no Bloco de Notas".
     """
-    verbo = _VERBOS.get(action, _VERBOS["click"])
     sufixo = f" {place[0].lower()}{place[1:]}" if place else ""
+    if action == "key":
+        vezes = f" {count} vezes" if count > 1 else ""
+        return f"Passo {number}: Pressione {key or 'Enter'}{vezes}{sufixo}"
+    verbo = _VERBOS.get(action, _VERBOS["click"])
     nome = short_name(element_name) if element_name else None
 
     if element_type == "campo de senha":
@@ -187,10 +192,13 @@ class Step:
     control_class: str | None = None
     element_name: str | None = None
     element_type: str | None = None
+    # Passos de teclado (action "key"): só "Tab", "Shift+Tab" ou "Enter", e quantas vezes seguidas.
+    key: str | None = None
+    count: int = 1
     id: str = field(default_factory=_new_id)
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "id": self.id,
             "image": self.image,
             "action": self.action,
@@ -211,6 +219,10 @@ class Step:
             "element_name": self.element_name,
             "element_type": self.element_type,
         }
+        if self.action == "key":  # passos de clique continuam com o mesmo formato de antes
+            data["key"] = self.key
+            data["count"] = self.count
+        return data
 
     @classmethod
     def from_dict(cls, d: dict) -> Step:
@@ -236,6 +248,8 @@ class Step:
             control_class=d.get("control_class"),
             element_name=d.get("element_name"),
             element_type=d.get("element_type"),
+            key=d.get("key"),
+            count=int(d.get("count") or 1),
         )
 
 

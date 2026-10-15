@@ -131,3 +131,16 @@ def forget_logo() -> None:
         default_logo_path().unlink(missing_ok=True)
     except OSError:
         pass
+
+
+# --- gravação ----------------------------------------------------------------
+
+
+def keyboard_steps() -> bool:
+    """Tab e Enter viram passos? Ligado por padrão."""
+    value = load().get("keyboard_steps", True)
+    return value if isinstance(value, bool) else True
+
+
+def set_keyboard_steps(enabled: bool) -> None:
+    _update("keyboard_steps", bool(enabled))
