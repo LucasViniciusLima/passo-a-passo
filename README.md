@@ -19,6 +19,7 @@ Este é o **protótipo da fase 0** (somente Windows 10/11). O plano completo est
 - DPI Per-Monitor V2, para o círculo cair no lugar certo em telas com 125%, 150% etc.
 - Projeto salvo numa pasta temporária a cada passo e, ao finalizar, em um arquivo `.passo` onde você escolher.
 - Janela de revisão: miniaturas, captura com o círculo, título e texto do passo editáveis.
+- Ordem dos passos: setas ▲ ▼ abaixo das miniaturas (ou Ctrl+↑/↓ na lista) e campo **Posição** para levar o passo direto a outro número (de 1 até o total). Os textos "Passo N:" são renumerados e Ctrl+Z desfaz.
 - Painel **Aparência**: logo (PNG, JPG ou SVG, copiada para dentro do `.passo`), cores do destaque, das margens, do fundo da página e do texto (com aviso de pouco contraste), e o tipo de destaque do fundo.
 - **Exportar…**: PDF (A4 ou Carta, 1 ou 2 passos por página, capa, selo numerado, círculo em vetor), GIF animado (960 px, 12 quadros/s, repetição infinita) e vídeo MP4 (1080p ou 720p, 30 quadros/s), com zoom suave no clique, círculo com pulso e transição esmaecer, deslizar ou zoom. Roda em segundo plano, com barra de progresso e Cancelar.
 

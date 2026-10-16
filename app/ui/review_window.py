@@ -7,14 +7,14 @@ import re
 from pathlib import Path
 
 from PIL import Image
-from PySide6.QtCore import QRectF, QSize, Qt, QUrl
+from PySide6.QtCore import QEvent, QRectF, QSize, Qt, QUrl
 from PySide6.QtGui import (
     QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPen, QPixmap, QShortcut, QTextDocument,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMainWindow, QMessageBox, QPushButton, QSizePolicy, QSplitter, QStyle, QStyledItemDelegate,
-    QVBoxLayout, QWidget,
+    QMainWindow, QMessageBox, QPushButton, QSizePolicy, QSpinBox, QSplitter, QStyle, QStyledItemDelegate,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from app import settings
@@ -140,8 +140,9 @@ class ReviewWindow(QMainWindow):
         self.saved_path = saved_path
         self.dirty = saved_path is None
         self._cache: dict[str, QPixmap] = {}
-        # Cada exclusão guarda os passos, os textos e a linha de antes, para o Ctrl+Z.
-        self._undo: list[tuple[list, dict[str, str], int]] = []
+        # Cada exclusão ou mudança de ordem guarda os passos, os textos, a linha de antes
+        # e a mensagem do desfazer, para o Ctrl+Z.
+        self._undo: list[tuple[list, dict[str, str], int, str]] = []
 
         self.list = QListWidget()
         self.list.setViewMode(QListWidget.ViewMode.IconMode)
@@ -163,6 +164,31 @@ class ReviewWindow(QMainWindow):
         self.btn_images.setToolTip("Grava um PNG por passo, com o círculo e o texto")
         self.btn_delete = QPushButton("Excluir passo")
         self.btn_delete.setToolTip("Exclui os passos selecionados (Delete). Ctrl+Z desfaz.")
+
+        # Ordem dos passos: setas e posição digitada (de 1 até o total, validada pela caixa).
+        self.btn_up = QToolButton(text="▲")
+        self.btn_up.setToolTip("Subir o passo (Ctrl+↑)")
+        self.btn_down = QToolButton(text="▼")
+        self.btn_down.setToolTip("Descer o passo (Ctrl+↓)")
+        self.position = QSpinBox()
+        self.position.setToolTip("Digite a nova posição do passo e tecle Enter")
+        self.position.setKeyboardTracking(False)  # só move ao confirmar, não a cada dígito
+        self.position.setMinimumWidth(52)
+        self.position_total = QLabel()
+        order = QHBoxLayout()
+        order.setContentsMargins(0, 0, 0, 0)
+        order.addWidget(self.btn_up)
+        order.addWidget(self.btn_down)
+        order.addStretch(1)
+        order.addWidget(QLabel("Posição:"))
+        order.addWidget(self.position)
+        order.addWidget(self.position_total)
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(self.list, 1)
+        left_layout.addLayout(order)
+        left.setFixedWidth(THUMB_SIZE.width() + 44)
 
         bottom = QHBoxLayout()
         bottom.addWidget(self.btn_delete)
@@ -190,7 +216,7 @@ class ReviewWindow(QMainWindow):
         self.appearance = AppearancePanel(workspace)
 
         splitter = QSplitter()
-        splitter.addWidget(self.list)
+        splitter.addWidget(left)
         splitter.addWidget(center)
         splitter.addWidget(self.appearance)
         splitter.setStretchFactor(1, 1)
@@ -201,6 +227,10 @@ class ReviewWindow(QMainWindow):
 
         self.list.currentRowChanged.connect(self._show_step)
         self.list.itemSelectionChanged.connect(self._update_delete_button)
+        self.list.currentRowChanged.connect(lambda _row: self._update_order_controls())
+        self.btn_up.clicked.connect(lambda: self.move_current(-1))
+        self.btn_down.clicked.connect(lambda: self.move_current(+1))
+        self.position.valueChanged.connect(self._position_entered)
         self.text.textEdited.connect(self._edit_text)
         self.btn_delete.clicked.connect(lambda: self.delete_selected())
         self.btn_save.clicked.connect(self.save)
@@ -214,10 +244,20 @@ class ReviewWindow(QMainWindow):
                   context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
         # Nos campos de texto o Ctrl+Z continua desfazendo a digitação (o campo trata antes).
         QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo_delete)
+        # Ctrl+↑/↓ na lista move o passo (a lista usaria a tecla só para mudar o foco).
+        self.list.installEventFilter(self)
         self._update_title()
         if self.project.steps:
             self.list.setCurrentRow(0)
         self._update_delete_button()
+        self._update_order_controls()
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.list and event.type() == QEvent.Type.KeyPress:
+            if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+                self.move_current(-1 if event.key() == Qt.Key.Key_Up else +1)
+                return True
+        return super().eventFilter(obj, event)
 
     def _annotated(self, index: int) -> QPixmap:
         step = self.project.steps[index]
@@ -245,6 +285,7 @@ class ReviewWindow(QMainWindow):
             self.list.setCurrentRow(max(0, min(row, len(self.project.steps) - 1)))
         self._show_step(self.list.currentRow())
         self._update_delete_button()
+        self._update_order_controls()
 
     def _show_step(self, row: int) -> None:
         if row < 0:
@@ -294,7 +335,7 @@ class ReviewWindow(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 return False
         steps = self.project.steps
-        self._undo.append((list(steps), {s.id: s.text for s in steps}, self.list.currentRow()))
+        self._push_undo("Exclusão desfeita")
         # As imagens ficam na pasta temporária (para o Ctrl+Z); o .passo e as exportações
         # só leem os passos restantes.
         removed = set(rows)
@@ -308,17 +349,58 @@ class ReviewWindow(QMainWindow):
         self.statusBar().showMessage(f"{done} — Ctrl+Z para desfazer", 8000)
         return True
 
+    def _push_undo(self, message: str) -> None:
+        steps = self.project.steps
+        self._undo.append((list(steps), {s.id: s.text for s in steps}, self.list.currentRow(), message))
+
     def undo_delete(self) -> bool:
+        """Ctrl+Z: desfaz a última exclusão ou mudança de ordem."""
         if not self._undo:
             return False
-        steps, texts, row = self._undo.pop()
+        steps, texts, row, message = self._undo.pop()
         self.project.steps[:] = steps
         for step in steps:
             step.text = texts.get(step.id, step.text)
         self._fill_list()
         self._select(row)
         self._mark_dirty()
-        self.statusBar().showMessage("Exclusão desfeita", 5000)
+        self.statusBar().showMessage(message, 5000)
+        return True
+
+    # --- ordem dos passos ------------------------------------------------
+
+    def _update_order_controls(self) -> None:
+        total = len(self.project.steps)
+        row = self.list.currentRow()
+        self.btn_up.setEnabled(0 < row)
+        self.btn_down.setEnabled(0 <= row < total - 1)
+        self.position.blockSignals(True)
+        self.position.setRange(1, max(total, 1))
+        self.position.setValue(row + 1 if row >= 0 else 1)
+        self.position.setEnabled(row >= 0 and total > 1)
+        self.position.blockSignals(False)
+        self.position_total.setText(f"de {total}")
+
+    def _position_entered(self, value: int) -> None:
+        if not self.move_step(self.list.currentRow(), value - 1):
+            self._update_order_controls()  # posição inválida: volta a mostrar a atual
+
+    def move_current(self, delta: int) -> bool:
+        row = self.list.currentRow()
+        return self.move_step(row, row + delta)
+
+    def move_step(self, row: int, new_row: int) -> bool:
+        """Leva o passo da linha row para new_row (0 = primeiro) e renumera os textos."""
+        steps = self.project.steps
+        if not (0 <= row < len(steps)) or not (0 <= new_row < len(steps)) or row == new_row:
+            return False
+        self._push_undo("Mudança de ordem desfeita")
+        steps.insert(new_row, steps.pop(row))
+        renumber_steps(steps)
+        self._fill_list()
+        self._select(new_row)
+        self._mark_dirty()
+        self.statusBar().showMessage(f"Passo movido para a posição {new_row + 1} — Ctrl+Z para desfazer", 6000)
         return True
 
     # --- edição ----------------------------------------------------------
